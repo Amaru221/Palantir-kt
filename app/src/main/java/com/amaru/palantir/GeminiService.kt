@@ -10,7 +10,7 @@ import java.io.File
 class GeminiService(apiKey: String) {
     private val TAG = "PALANTIR_API"
 
-    // Modelo ligero y rápido de Gemini
+    // Modelo multimodal estable para procesar audio
     private val generativeModel = GenerativeModel(
         modelName = "gemini-3.5-flash",
         apiKey = apiKey
@@ -21,9 +21,9 @@ class GeminiService(apiKey: String) {
      * el cual transcribe e interpreta la instrucción.
      */
     suspend fun processVoiceQuery(audioFile: File): String = withContext(Dispatchers.IO) {
-        Log.e(TAG, "=== INICIANDO CONSULTA A GEMINI ===")
-        Log.e(TAG, "Ruta archivo: ${audioFile.absolutePath}")
-        Log.e(TAG, "Existe: ${audioFile.exists()} | Tamaño: ${audioFile.length()} bytes")
+        Log.d(TAG, "=== INICIANDO CONSULTA A GEMINI ===")
+        Log.d(TAG, "Ruta archivo: ${audioFile.absolutePath}")
+        Log.d(TAG, "Existe: ${audioFile.exists()} | Tamaño: ${audioFile.length()} bytes")
 
         if (!audioFile.exists() || audioFile.length() <= 44) {
             Log.e(TAG, "ERROR: El archivo de audio está vacío o no existe.")
@@ -33,20 +33,20 @@ class GeminiService(apiKey: String) {
         try {
             val audioBytes = audioFile.readBytes()
 
-            // Preparamos el contenido enviando los bytes del audio + la instrucción del sistema
+            // Preparamos el contenido enviando los bytes del audio + la instrucción
             val inputContent = content {
                 blob(mimeType = "audio/wav", blob = audioBytes)
                 text(
                     "Escucha el audio adjunto. Responde de forma directa y concisa a lo que " +
-                            "pregunta el usuario. Tu respuesta debe ser de un máximo de 3 frases breves"
+                            "pregunta el usuario. Tu respuesta debe ser de un máximo de 3 frases breves."
                 )
             }
 
-            Log.e(TAG, "Enviando audio a Gemini API...")
+            Log.d(TAG, "Enviando audio a Gemini API...")
             val response = generativeModel.generateContent(inputContent)
 
             val responseText = response.text ?: "No pude procesar la respuesta."
-            Log.e(TAG, "RESPUESTA DE GEMINI: $responseText")
+            Log.d(TAG, "RESPUESTA DE GEMINI: $responseText")
 
             return@withContext responseText
 

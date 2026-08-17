@@ -15,15 +15,16 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.random.Random
 
-// Enum de estados que utiliza la interfaz
+// Enum de estados actualizado
 enum class PalantirState {
-    IDLE,       // Reposo / Esperando
-    LISTENING,  // Escuchando / Grabando
-    THINKING,   // Procesando con Gemini
-    SPEAKING    // Hablando respuesta
+    WAITING_WAKE_WORD, // Escuchando "Oye Palantir"
+    LISTENING,          // Grabando consulta tras wake word
+    THINKING,           // Procesando con Gemini
+    SPEAKING            // Hablando respuesta
 }
 
 enum class UiStyle { EYES, SCI_FI, AUDIO_REACTIVE }
@@ -47,14 +48,14 @@ fun InterfaceSelector(
 }
 
 // -------------------------------------------------------------
-// 1. CARA DE ROBOT / OJOS ANIMADOS CON EXPRESIONES
+// 1. CARA DE ROBOT / OJOS ANIMADOS
 // -------------------------------------------------------------
 @Composable
 fun AnimatedEyesUi(state: PalantirState, amplitude: Int) {
     var isBlinking by remember { mutableStateOf(false) }
 
     LaunchedEffect(state) {
-        while (state == PalantirState.IDLE) {
+        while (state == PalantirState.WAITING_WAKE_WORD) {
             kotlinx.coroutines.delay(Random.nextLong(2000, 4500))
             isBlinking = true
             kotlinx.coroutines.delay(120)
@@ -73,19 +74,20 @@ fun AnimatedEyesUi(state: PalantirState, amplitude: Int) {
         label = "offsetY"
     )
 
-    val eyeHeight = when {
+    // Se especifica el tipo explícito : Dp y se añade la rama else
+    val eyeHeight: Dp = when {
         isBlinking -> 3.dp
-        state == PalantirState.IDLE -> 14.dp
+        state == PalantirState.WAITING_WAKE_WORD -> 14.dp
         state == PalantirState.LISTENING -> 34.dp
         state == PalantirState.THINKING -> 18.dp
         state == PalantirState.SPEAKING -> (24 + (amplitude / 800).coerceIn(0, 16)).dp
-        else -> 28.dp
+        else -> 14.dp
     }
 
-    val eyeWidth = if (state == PalantirState.LISTENING) 26.dp else 22.dp
+    val eyeWidth: Dp = if (state == PalantirState.LISTENING) 26.dp else 22.dp
 
     val eyeColor = when (state) {
-        PalantirState.IDLE -> Color(0xFF64B5F6)
+        PalantirState.WAITING_WAKE_WORD -> Color(0xFF64B5F6)
         PalantirState.LISTENING -> Color(0xFFFF5252)
         PalantirState.THINKING -> Color(0xFFFFB74D)
         PalantirState.SPEAKING -> Color(0xFF81C784)
@@ -116,12 +118,12 @@ fun AnimatedEyesUi(state: PalantirState, amplitude: Int) {
 }
 
 // -------------------------------------------------------------
-// 2. ORBE SCI-FI / JARVIS CON ANILLOS DINÁMICOS
+// 2. ORBE SCI-FI / JARVIS
 // -------------------------------------------------------------
 @Composable
 fun SciFiOrbUi(state: PalantirState) {
     val duration = when (state) {
-        PalantirState.IDLE -> 8000
+        PalantirState.WAITING_WAKE_WORD -> 8000
         PalantirState.LISTENING -> 3000
         PalantirState.THINKING -> 800
         PalantirState.SPEAKING -> 2000
@@ -149,7 +151,7 @@ fun SciFiOrbUi(state: PalantirState) {
     )
 
     val color = when (state) {
-        PalantirState.IDLE -> Color(0xFF00E5FF)
+        PalantirState.WAITING_WAKE_WORD -> Color(0xFF00E5FF)
         PalantirState.LISTENING -> Color(0xFFFF1744)
         PalantirState.THINKING -> Color(0xFFFF9100)
         PalantirState.SPEAKING -> Color(0xFF00E676)
@@ -158,7 +160,7 @@ fun SciFiOrbUi(state: PalantirState) {
     Canvas(
         modifier = Modifier
             .size(110.dp)
-            .scale(if (state == PalantirState.IDLE) pulseScale else 1.0f)
+            .scale(if (state == PalantirState.WAITING_WAKE_WORD) pulseScale else 1.0f)
     ) {
         val center = Offset(size.width / 2, size.height / 2)
 
@@ -192,7 +194,7 @@ fun SciFiOrbUi(state: PalantirState) {
 }
 
 // -------------------------------------------------------------
-// 3. ORBE ORGANICO REACTIVO Y VIBRANTE
+// 3. ORBE REACTIVO
 // -------------------------------------------------------------
 @Composable
 fun AudioReactiveOrbUi(state: PalantirState, amplitude: Int) {
@@ -210,7 +212,7 @@ fun AudioReactiveOrbUi(state: PalantirState, amplitude: Int) {
     val voiceScale = 0.9f + (amplitude / 7000f).coerceIn(0f, 0.55f)
 
     val currentScale = when (state) {
-        PalantirState.IDLE -> idleScale
+        PalantirState.WAITING_WAKE_WORD -> idleScale
         PalantirState.THINKING -> 1.0f
         else -> voiceScale
     }
@@ -225,7 +227,7 @@ fun AudioReactiveOrbUi(state: PalantirState, amplitude: Int) {
     )
 
     val color = when (state) {
-        PalantirState.IDLE -> Color(0xFF29B6F6)
+        PalantirState.WAITING_WAKE_WORD -> Color(0xFF29B6F6)
         PalantirState.LISTENING -> Color(0xFFEF5350)
         PalantirState.THINKING -> Color(0xFFFFA726)
         PalantirState.SPEAKING -> Color(0xFF66BB6A)

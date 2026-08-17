@@ -1,8 +1,11 @@
 package com.amaru.palantir.presentation
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -14,6 +17,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,17 +25,25 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.sharp.Settings
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.wear.compose.material.MaterialTheme
-import androidx.wear.compose.material.Text
+import androidx.wear.compose.material.*
 import com.amaru.palantir.GeminiService
 import com.amaru.palantir.InterfaceSelector
 import com.amaru.palantir.PalantirState
@@ -42,17 +54,25 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private val TAG = "PALANTIR_MAIN"
 
-    // Sustituye por tu API Key válida de Google AI Studio
-    private val GEMINI_API_KEY = "TU_API_KEY"
+    // SharedPreferences para guardar configuración localmente
+    private lateinit var prefs: SharedPreferences
+
+    // Valores de configuración (con valores por defecto)
+    private var apiKey: String = "TU API KEY"
+    private var selectedVoiceName: String? = null
+    private var speechRate: Float = 0.94f
+    private var pitch: Float = 0.95f
 
     private lateinit var geminiService: GeminiService
     private var tts: TextToSpeech? = null
+    private var availableVoicesList by mutableStateOf<List<Voice>>(emptyList())
 
     // Reconocedor de la palabra clave (Wake Word)
     private var speechRecognizer: SpeechRecognizer? = null
@@ -68,6 +88,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var currentStyle by mutableStateOf(UiStyle.AUDIO_REACTIVE)
     private var amplitude by mutableIntStateOf(0)
     private var statusText by mutableStateOf("Di \"Oye Palantir\"...")
+    private var showSettingsDialog by mutableStateOf(false)
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -85,8 +106,17 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        geminiService = GeminiService(GEMINI_API_KEY)
-        tts = TextToSpeech(this, this)
+        // Cargar preferencias guardadas en el reloj
+        prefs = getSharedPreferences("palantir_settings", Context.MODE_PRIVATE)
+        apiKey = prefs.getString("gemini_api_key", apiKey) ?: apiKey
+        selectedVoiceName = prefs.getString("tts_voice_name", null)
+        speechRate = prefs.getFloat("tts_speech_rate", 0.94f)
+        pitch = prefs.getFloat("tts_pitch", 0.95f)
+
+        geminiService = GeminiService(apiKey)
+
+        // Forzar motor de Google TTS para evitar restricciones de fabricantes
+        tts = TextToSpeech(this, this, "com.google.android.tts")
 
         setContent {
             MaterialTheme {
@@ -94,9 +124,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black)
-                        .clickable {
-                            onScreenTapped()
-                        },
+                        .clickable { onScreenTapped() },
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
@@ -137,6 +165,63 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                             }
                         )
                     }
+
+                    // Botón de Ajustes en la esquina superior derecha
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = 10.dp, end = 10.dp),
+                        contentAlignment = Alignment.TopEnd
+                    ) {
+                        Button(
+                            onClick = { showSettingsDialog = true },
+                            modifier = Modifier.size(32.dp),
+                            shape = CircleShape,
+                            colors = ButtonDefaults.buttonColors(
+                                backgroundColor = Color.DarkGray.copy(alpha = 0.6f)
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Sharp.Settings,
+                                contentDescription = "Ajustes",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    // Modal de Configuración
+                    if (showSettingsDialog) {
+                        SettingsScreen(
+                            currentApiKey = apiKey,
+                            currentVoiceName = selectedVoiceName,
+                            currentRate = speechRate,
+                            currentPitch = pitch,
+                            voices = availableVoicesList,
+                            onSave = { newApiKey, newVoice, newRate, newPitch ->
+                                apiKey = newApiKey
+                                selectedVoiceName = newVoice?.name
+                                speechRate = newRate
+                                pitch = newPitch
+
+                                // Guardar en SharedPreferences
+                                prefs.edit().apply {
+                                    putString("gemini_api_key", apiKey)
+                                    putString("tts_voice_name", selectedVoiceName)
+                                    putFloat("tts_speech_rate", speechRate)
+                                    putFloat("tts_pitch", pitch)
+                                    apply()
+                                }
+
+                                // Re-aplicar cambios
+                                geminiService = GeminiService(apiKey)
+                                applyTtsSettings()
+
+                                showSettingsDialog = false
+                            },
+                            onDismiss = { showSettingsDialog = false }
+                        )
+                    }
                 }
             }
         }
@@ -156,6 +241,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun onScreenTapped() {
+        if (showSettingsDialog) return
         when (currentState) {
             PalantirState.SPEAKING -> stopSpeakingAndReset()
             PalantirState.LISTENING -> finishQueryRecording()
@@ -176,8 +262,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 override fun onEndOfSpeech() {}
 
                 override fun onError(error: Int) {
-                    if (isListeningWakeWord) {
-                        // Reintentar escucha de wake word ante pequeños timeouts de red/micro
+                    if (isListeningWakeWord && !showSettingsDialog) {
                         mainHandler.postDelayed({ restartWakeWordListening() }, 500)
                     }
                 }
@@ -185,8 +270,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 override fun onResults(results: Bundle?) {
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     val text = matches?.firstOrNull()?.lowercase(Locale.getDefault()) ?: ""
-
-                    Log.d(TAG, "Texto detectado en WakeWord: $text")
 
                     if (text.contains("palantir") || text.contains("oye palantir")) {
                         stopWakeWordListening()
@@ -211,6 +294,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun startWakeWordListening() {
+        if (showSettingsDialog) return
         if (speechRecognizer == null) initSpeechRecognizer()
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -231,7 +315,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun restartWakeWordListening() {
-        if (isListeningWakeWord) {
+        if (isListeningWakeWord && !showSettingsDialog) {
             speechRecognizer?.cancel()
             startWakeWordListening()
         }
@@ -247,7 +331,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // --- GRABACIÓN Y DETECCIÓN DE SILENCIO (VAD 3 Segundos) ---
+    // --- GRABACIÓN Y DETECCIÓN DE SILENCIO (VAD) ---
 
     private fun startQueryRecording() {
         stopSpeaking()
@@ -259,6 +343,20 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioEncoding)
 
         try {
+            if (ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.RECORD_AUDIO
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                // TODO: Consider calling
+                //    ActivityCompat#requestPermissions
+                // here to request the missing permissions, and then overriding
+                //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                //                                          int[] grantResults)
+                // to handle the case where the user grants the permission. See the documentation
+                // for ActivityCompat#requestPermissions for more details.
+                return
+            }
             audioRecord = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
                 sampleRate,
@@ -277,11 +375,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             }
             recordingThread?.start()
 
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Error permiso micro: ${e.message}")
-            resetToWakeWordState()
         } catch (e: Exception) {
-            Log.e(TAG, "Error abriendo micro: ${e.message}")
+            Log.e(TAG, "Error iniciando grabación: ${e.message}")
             resetToWakeWordState()
         }
     }
@@ -291,17 +386,15 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val data = ByteArray(bufferSize)
         val outputStream = FileOutputStream(file)
 
-        // Reserva 44 bytes para la cabecera WAV
         outputStream.write(ByteArray(44))
 
-        val silenceThresholdDb = -35.0  // Umbral de silencio en dB
-        val silenceDurationMs = 3000L   // 3 segundos de silencio
+        val silenceThresholdDb = -35.0
+        val silenceDurationMs = 3000L
         var lastSoundTime = System.currentTimeMillis()
 
         while (isRecording) {
             val readShorts = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: 0
             if (readShorts > 0) {
-                // Convertir ShortArray a ByteArray para guardar PCM 16-bit LE
                 for (i in 0 until readShorts) {
                     val sample = shortBuffer[i].toInt()
                     data[i * 2] = (sample and 0x00FF).toByte()
@@ -310,7 +403,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
                 outputStream.write(data, 0, readShorts * 2)
 
-                // 1. Calcular amplitud relativa para animación en pantalla
                 var maxAmplitude = 0
                 var sumSquares = 0.0
                 for (i in 0 until readShorts) {
@@ -320,17 +412,14 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 }
                 amplitude = maxAmplitude
 
-                // 2. Calcular energía en dB
                 val rms = sqrt(sumSquares / readShorts)
                 val db = if (rms > 0) 20 * Math.log10(rms / 32767.0) else -100.0
 
-                // 3. Evaluar silenciador VAD
                 if (db > silenceThresholdDb) {
                     lastSoundTime = System.currentTimeMillis()
                 } else {
                     val silenceElapsed = System.currentTimeMillis() - lastSoundTime
                     if (silenceElapsed >= silenceDurationMs) {
-                        Log.d(TAG, "3 segundos de silencio detectados. Finalizando grabación...")
                         isRecording = false
                         break
                     }
@@ -339,14 +428,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         outputStream.close()
-
-        // Escribir la cabecera WAV válida al inicio del archivo
         finalizeWavHeader(file, sampleRate)
 
-        // Procesar la consulta al terminar la grabación
-        mainHandler.post {
-            finishQueryRecording()
-        }
+        mainHandler.post { finishQueryRecording() }
     }
 
     private fun finalizeWavHeader(file: File, sampleRate: Int) {
@@ -378,13 +462,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         if (currentState != PalantirState.LISTENING && currentState != PalantirState.THINKING) return
 
         isRecording = false
-
         try {
             audioRecord?.stop()
             audioRecord?.release()
             audioRecord = null
         } catch (e: Exception) {
-            Log.e(TAG, "Error al detener AudioRecord: ${e.message}")
+            Log.e(TAG, "Error deteniendo micro: ${e.message}")
         }
 
         currentState = PalantirState.THINKING
@@ -400,11 +483,23 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // --- TTS Y RESET DE CICLO ---
+    // --- TTS Y AJUSTES DE VOZ ---
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts?.setLanguage(Locale("es", "ES"))
+
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            tts?.setAudioAttributes(audioAttributes)
+
+            val allVoices = tts?.voices ?: emptySet()
+            availableVoicesList = allVoices.filter { it.locale.language == "es" }
+
+            applyTtsSettings()
+
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     currentState = PalantirState.SPEAKING
@@ -421,8 +516,39 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun applyTtsSettings() {
+        tts?.setSpeechRate(speechRate)
+        tts?.setPitch(pitch)
+
+        if (!selectedVoiceName.isNullOrEmpty()) {
+            val foundVoice = availableVoicesList.find { it.name == selectedVoiceName }
+            if (foundVoice != null) {
+                tts?.voice = foundVoice
+                return
+            }
+        }
+
+        val defaultMale = availableVoicesList.find { voice ->
+            val name = voice.name.lowercase(Locale.getDefault())
+            !name.contains("female") && !name.contains("esf") && (name.contains("male") || name.contains("esm") || name.contains("man"))
+        } ?: availableVoicesList.firstOrNull()
+
+        defaultMale?.let { tts?.voice = it }
+    }
+
     private fun speak(text: String) {
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "PalantirTTS")
+        val cleanText = text
+            .replace("%", " por ciento")
+            .replace("€", " euros")
+            .replace("$", " dólares")
+            .replace("&", " y ")
+            .replace("@", " arroba")
+            .replace(Regex("[*#_`~>\\-]"), "")
+            .replace(Regex("\n+"), ". ")
+            .replace(Regex("\\.{2,}"), ".")
+            .trim()
+
+        tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, "PalantirTTS")
     }
 
     private fun stopSpeaking() {
@@ -450,5 +576,157 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         speechRecognizer?.destroy()
         tts?.stop()
         tts?.shutdown()
+    }
+}
+
+// --- PANTALLA DE CONFIGURACIÓN (UI EN DIÁLOGO MODAL) ---
+
+@Composable
+fun SettingsScreen(
+    currentApiKey: String,
+    currentVoiceName: String?,
+    currentRate: Float,
+    currentPitch: Float,
+    voices: List<Voice>,
+    onSave: (apiKey: String, selectedVoice: Voice?, rate: Float, pitch: Float) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var apiKeyText by remember { mutableStateOf(currentApiKey) }
+    var selectedVoice by remember {
+        mutableStateOf(voices.find { it.name == currentVoiceName } ?: voices.firstOrNull())
+    }
+    var rate by remember { mutableFloatStateOf(currentRate) }
+    var pitch by remember { mutableFloatStateOf(currentPitch) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .padding(8.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Ajustes",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                // 1. API Key
+                Text("API Key Gemini", fontSize = 10.sp, color = Color.Gray)
+                BasicTextField(
+                    value = apiKeyText,
+                    onValueChange = { apiKeyText = it },
+                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.Cyan, fontSize = 10.sp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.DarkGray, shape = CircleShape)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 2. Velocidad (Speech Rate)
+                Text("Velocidad: ${(rate * 100).roundToInt() / 100.0}", fontSize = 10.sp, color = Color.White)
+                InlineSlider(
+                    value = rate,
+                    onValueChange = { rate = it },
+                    steps = 9,
+                    decreaseIcon = {
+                        Icon(
+                            imageVector = InlineSliderDefaults.Decrease,
+                            contentDescription = "Disminuir velocidad"
+                        )
+                    },
+                    increaseIcon = {
+                        Icon(
+                            imageVector = InlineSliderDefaults.Increase,
+                            contentDescription = "Aumentar velocidad"
+                        )
+                    },
+                    valueRange = 0.5f..1.5f,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // 3. Tono (Pitch)
+                Text("Tono: ${(pitch * 100).roundToInt() / 100.0}", fontSize = 10.sp, color = Color.White)
+                InlineSlider(
+                    value = pitch,
+                    onValueChange = { pitch = it },
+                    steps = 9,
+                    decreaseIcon = {
+                        Icon(
+                            imageVector = InlineSliderDefaults.Decrease,
+                            contentDescription = "Disminuir tono"
+                        )
+                    },
+                    increaseIcon = {
+                        Icon(
+                            imageVector = InlineSliderDefaults.Increase,
+                            contentDescription = "Aumentar tono"
+                        )
+                    },
+                    valueRange = 0.5f..1.5f,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // 4. Selección de Voz
+                Text("Voz de la App", fontSize = 10.sp, color = Color.White)
+                voices.forEach { voice ->
+                    val isSelected = voice.name == selectedVoice?.name
+                    Chip(
+                        label = {
+                            Text(
+                                text = voice.name.takeLast(15),
+                                fontSize = 9.sp,
+                                color = if (isSelected) Color.Black else Color.White
+                            )
+                        },
+                        onClick = { selectedVoice = voice },
+                        colors = ChipDefaults.chipColors(
+                            backgroundColor = if (isSelected) Color.Cyan else Color.DarkGray
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Botones Guardar y Cancelar
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    CompactButton(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)
+                    ) {
+                        Text("X", fontSize = 10.sp, color = Color.White)
+                    }
+
+                    CompactButton(
+                        onClick = {
+                            onSave(apiKeyText, selectedVoice, rate, pitch)
+                        },
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color.Green)
+                    ) {
+                        Text("✓", fontSize = 10.sp, color = Color.Black)
+                    }
+                }
+            }
+        }
     }
 }

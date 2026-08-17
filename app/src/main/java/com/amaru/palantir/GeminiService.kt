@@ -37,8 +37,14 @@ class GeminiService(apiKey: String) {
             val inputContent = content {
                 blob(mimeType = "audio/wav", blob = audioBytes)
                 text(
-                    "Escucha el audio adjunto. Responde de forma directa y concisa a lo que " +
-                            "pregunta el usuario. Tu respuesta debe ser de un máximo de 3 frases breves."
+                    """
+                    Eres Palantir, un asistente de voz para smartwatch.
+            
+                    REGLAS:
+                    - Escucha el audio y responde de forma directa, en una o dos frases fluidas en prosa.
+                    - Sin saludos, sin listas ni preámbulos. Ve directo al grano.
+                    - Si el audio no se entiende, responde únicamente: "No he podido escucharte bien, ¿puedes repetirlo?".
+                    """.trimIndent()
                 )
             }
 

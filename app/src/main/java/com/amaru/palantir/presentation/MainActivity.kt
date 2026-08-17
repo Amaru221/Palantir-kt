@@ -174,7 +174,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         contentAlignment = Alignment.TopEnd
                     ) {
                         Button(
-                            onClick = { showSettingsDialog = true },
+                            onClick = {
+                                        stopWakeWordListening()
+                                        stopSpeaking()
+                                        showSettingsDialog = true
+                                      },
                             modifier = Modifier.size(32.dp),
                             shape = CircleShape,
                             colors = ButtonDefaults.buttonColors(
@@ -218,8 +222,15 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                 applyTtsSettings()
 
                                 showSettingsDialog = false
+
+                                // Reiniciar escucha del Wake Word al guardar
+                                resetToWakeWordState()
                             },
-                            onDismiss = { showSettingsDialog = false }
+                            onDismiss = {
+                                showSettingsDialog = false
+                                // Reiniciar escucha del Wake Word al cancelar/cerrar
+                                resetToWakeWordState()
+                            }
                         )
                     }
                 }

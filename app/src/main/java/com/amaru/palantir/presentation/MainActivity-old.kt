@@ -24,7 +24,7 @@ enum class PalantirStateOld { IDLE, LISTENING, THINKING, SPEAKING }
 class MainActivityold : ComponentActivity() {
 
     private lateinit var keyManager: `KeyManager-old`
-    private lateinit var recorder: AudioRecorder
+    private lateinit var recorder: `AudioRecorder-old`
     private lateinit var tts: TtsManager
     // API KEY OPENAI
     private var openAiService: OpenAiService? = OpenAiService(apiKey = "TU API KEY")
@@ -33,7 +33,7 @@ class MainActivityold : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         keyManager = `KeyManager-old`(this)
-        recorder = AudioRecorder(this)
+        recorder = `AudioRecorder-old`(this)
         tts = TtsManager(this)
 
         checkPermissions()

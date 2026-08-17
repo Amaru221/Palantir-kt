@@ -40,7 +40,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.wear.compose.material.*
@@ -61,12 +60,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private val TAG = "PALANTIR_MAIN"
 
-    // SharedPreferences para guardar configuración localmente
     private lateinit var prefs: SharedPreferences
 
-    // Valores de configuración (con valores por defecto)
-    private var apiKey: String = "TU API KEY"
+    // Valores de configuración
+    private var apiKey: String = ""
     private var selectedVoiceName: String? = null
+    private var selectedLanguage: String = "ES" // "ES" o "US"
+    private var selectedGender: String = "MALE"  // "MALE" o "FEMALE"
     private var speechRate: Float = 0.94f
     private var pitch: Float = 0.95f
 
@@ -106,16 +106,15 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Cargar preferencias guardadas en el reloj
         prefs = getSharedPreferences("palantir_settings", Context.MODE_PRIVATE)
         apiKey = prefs.getString("gemini_api_key", apiKey) ?: apiKey
         selectedVoiceName = prefs.getString("tts_voice_name", null)
+        selectedLanguage = prefs.getString("tts_language", "ES") ?: "ES"
+        selectedGender = prefs.getString("tts_gender", "MALE") ?: "MALE"
         speechRate = prefs.getFloat("tts_speech_rate", 0.94f)
         pitch = prefs.getFloat("tts_pitch", 0.95f)
 
         geminiService = GeminiService(apiKey)
-
-        // Forzar motor de Google TTS para evitar restricciones de fabricantes
         tts = TextToSpeech(this, this, "com.google.android.tts")
 
         setContent {
@@ -166,7 +165,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         )
                     }
 
-                    // Botón de Ajustes en la esquina superior derecha
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -175,10 +173,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     ) {
                         Button(
                             onClick = {
-                                        stopWakeWordListening()
-                                        stopSpeaking()
-                                        showSettingsDialog = true
-                                      },
+                                stopWakeWordListening()
+                                stopSpeaking()
+                                showSettingsDialog = true
+                            },
                             modifier = Modifier.size(32.dp),
                             shape = CircleShape,
                             colors = ButtonDefaults.buttonColors(
@@ -194,41 +192,41 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         }
                     }
 
-                    // Modal de Configuración
                     if (showSettingsDialog) {
                         SettingsScreen(
                             currentApiKey = apiKey,
+                            currentLanguage = selectedLanguage,
+                            currentGender = selectedGender,
                             currentVoiceName = selectedVoiceName,
                             currentRate = speechRate,
                             currentPitch = pitch,
-                            voices = availableVoicesList,
-                            onSave = { newApiKey, newVoice, newRate, newPitch ->
+                            allVoices = availableVoicesList,
+                            onSave = { newApiKey, newLang, newGender, newVoice, newRate, newPitch ->
                                 apiKey = newApiKey
+                                selectedLanguage = newLang
+                                selectedGender = newGender
                                 selectedVoiceName = newVoice?.name
                                 speechRate = newRate
                                 pitch = newPitch
 
-                                // Guardar en SharedPreferences
                                 prefs.edit().apply {
                                     putString("gemini_api_key", apiKey)
+                                    putString("tts_language", selectedLanguage)
+                                    putString("tts_gender", selectedGender)
                                     putString("tts_voice_name", selectedVoiceName)
                                     putFloat("tts_speech_rate", speechRate)
                                     putFloat("tts_pitch", pitch)
                                     apply()
                                 }
 
-                                // Re-aplicar cambios
                                 geminiService = GeminiService(apiKey)
                                 applyTtsSettings()
 
                                 showSettingsDialog = false
-
-                                // Reiniciar escucha del Wake Word al guardar
                                 resetToWakeWordState()
                             },
                             onDismiss = {
                                 showSettingsDialog = false
-                                // Reiniciar escucha del Wake Word al cancelar/cerrar
                                 resetToWakeWordState()
                             }
                         )
@@ -260,7 +258,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // --- RECONOCEDOR WAKE WORD ("Oye Palantir") ---
+    // --- RECONOCEDOR WAKE WORD ---
 
     private fun initSpeechRecognizer() {
         if (SpeechRecognizer.isRecognitionAvailable(this)) {
@@ -310,13 +308,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-ES")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (selectedLanguage == "US") "en-US" else "es-ES")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         }
 
         isListeningWakeWord = true
         currentState = PalantirState.WAITING_WAKE_WORD
-        statusText = "Di \"Oye Palantir\"..."
+        statusText = if (selectedLanguage == "US") "Say \"Oye Palantir\"..." else "Di \"Oye Palantir\"..."
 
         try {
             speechRecognizer?.startListening(intent)
@@ -342,7 +340,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // --- GRABACIÓN Y DETECCIÓN DE SILENCIO (VAD) ---
+    // --- GRABACIÓN Y VAD ---
 
     private fun startQueryRecording() {
         stopSpeaking()
@@ -354,20 +352,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioEncoding)
 
         try {
-            if (ActivityCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.RECORD_AUDIO
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                // TODO: Consider calling
-                //    ActivityCompat#requestPermissions
-                // here to request the missing permissions, and then overriding
-                //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-                //                                          int[] grantResults)
-                // to handle the case where the user grants the permission. See the documentation
-                // for ActivityCompat#requestPermissions for more details.
-                return
-            }
             audioRecord = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
                 sampleRate,
@@ -379,7 +363,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             audioRecord?.startRecording()
             isRecording = true
             currentState = PalantirState.LISTENING
-            statusText = "Escuchando consulta..."
+            statusText = if (selectedLanguage == "US") "Listening..." else "Escuchando consulta..."
 
             recordingThread = Thread {
                 writeWavFileWithSilenceDetection(wavFile, sampleRate, bufferSize)
@@ -482,7 +466,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         currentState = PalantirState.THINKING
-        statusText = "Pensando..."
+        statusText = if (selectedLanguage == "US") "Thinking..." else "Pensando..."
         amplitude = 0
 
         lifecycleScope.launch(Dispatchers.Main) {
@@ -494,12 +478,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // --- TTS Y AJUSTES DE VOZ ---
+    // --- TTS ---
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            tts?.setLanguage(Locale("es", "ES"))
-
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANT)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -507,7 +489,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             tts?.setAudioAttributes(audioAttributes)
 
             val allVoices = tts?.voices ?: emptySet()
-            availableVoicesList = allVoices.filter { it.locale.language == "es" }
+            availableVoicesList = allVoices.toList()
 
             applyTtsSettings()
 
@@ -528,6 +510,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun applyTtsSettings() {
+        val targetLocale = if (selectedLanguage == "US") Locale.US else Locale("es", "ES")
+        tts?.setLanguage(targetLocale)
         tts?.setSpeechRate(speechRate)
         tts?.setPitch(pitch)
 
@@ -539,12 +523,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             }
         }
 
-        val defaultMale = availableVoicesList.find { voice ->
+        // Selección por defecto filtrada por idioma y género
+        val filtered = availableVoicesList.filter { voice ->
+            val langMatch = if (selectedLanguage == "US") voice.locale.language == "en" else voice.locale.language == "es"
             val name = voice.name.lowercase(Locale.getDefault())
-            !name.contains("female") && !name.contains("esf") && (name.contains("male") || name.contains("esm") || name.contains("man"))
-        } ?: availableVoicesList.firstOrNull()
+            val isFemale = name.contains("female") || name.contains("esf") || name.contains("zoraida")
+            val genderMatch = if (selectedGender == "FEMALE") isFemale else !isFemale
+            langMatch && genderMatch
+        }
 
-        defaultMale?.let { tts?.voice = it }
+        filtered.firstOrNull()?.let { tts?.voice = it }
     }
 
     private fun speak(text: String) {
@@ -575,7 +563,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun resetToWakeWordState() {
         isRecording = false
         currentState = PalantirState.WAITING_WAKE_WORD
-        statusText = "Di \"Oye Palantir\"..."
+        statusText = if (selectedLanguage == "US") "Say \"Oye Palantir\"..." else "Di \"Oye Palantir\"..."
         amplitude = 0
         startWakeWordListening()
     }
@@ -590,24 +578,48 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 }
 
-// --- PANTALLA DE CONFIGURACIÓN (UI EN DIÁLOGO MODAL) ---
+// --- PANTALLA DE CONFIGURACIÓN ---
 
 @Composable
 fun SettingsScreen(
     currentApiKey: String,
+    currentLanguage: String,
+    currentGender: String,
     currentVoiceName: String?,
     currentRate: Float,
     currentPitch: Float,
-    voices: List<Voice>,
-    onSave: (apiKey: String, selectedVoice: Voice?, rate: Float, pitch: Float) -> Unit,
+    allVoices: List<Voice>,
+    onSave: (apiKey: String, language: String, gender: String, selectedVoice: Voice?, rate: Float, pitch: Float) -> Unit,
     onDismiss: () -> Unit
 ) {
     var apiKeyText by remember { mutableStateOf(currentApiKey) }
-    var selectedVoice by remember {
-        mutableStateOf(voices.find { it.name == currentVoiceName } ?: voices.firstOrNull())
-    }
+    var selectedLanguage by remember { mutableStateOf(currentLanguage) } // "ES" o "US"
+    var selectedGender by remember { mutableStateOf(currentGender) }     // "MALE" o "FEMALE"
     var rate by remember { mutableFloatStateOf(currentRate) }
     var pitch by remember { mutableFloatStateOf(currentPitch) }
+
+    // Filtrar voces según Idioma (ES / US) y Género (Hombre / Mujer)
+    val filteredVoices = remember(selectedLanguage, selectedGender, allVoices) {
+        allVoices.filter { voice ->
+            val langMatch = if (selectedLanguage == "US") {
+                voice.locale.language == "en"
+            } else {
+                voice.locale.language == "es"
+            }
+
+            val name = voice.name.lowercase(Locale.getDefault())
+            val isFemale = name.contains("female") || name.contains("esf") || name.contains("zoraida") || name.contains("monica")
+            val genderMatch = if (selectedGender == "FEMALE") isFemale else !isFemale
+
+            langMatch && genderMatch
+        }
+    }
+
+    var selectedVoice by remember(filteredVoices) {
+        mutableStateOf(
+            filteredVoices.find { it.name == currentVoiceName } ?: filteredVoices.firstOrNull()
+        )
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Box(
@@ -644,74 +656,110 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 2. Velocidad (Speech Rate)
+                // 2. Selector de IDIOMA (ES / US)
+                Text("Idioma", fontSize = 10.sp, color = Color.White)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    CompactChip(
+                        label = { Text("ES", fontSize = 9.sp, color = if (selectedLanguage == "ES") Color.Black else Color.White) },
+                        onClick = { selectedLanguage = "ES" },
+                        colors = ChipDefaults.chipColors(
+                            backgroundColor = if (selectedLanguage == "ES") Color.Cyan else Color.DarkGray
+                        )
+                    )
+                    CompactChip(
+                        label = { Text("US", fontSize = 9.sp, color = if (selectedLanguage == "US") Color.Black else Color.White) },
+                        onClick = { selectedLanguage = "US" },
+                        colors = ChipDefaults.chipColors(
+                            backgroundColor = if (selectedLanguage == "US") Color.Cyan else Color.DarkGray
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // 3. Selector de GÉNERO (Hombre / Mujer)
+                Text("Género", fontSize = 10.sp, color = Color.White)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    CompactChip(
+                        label = { Text("Hombre", fontSize = 9.sp, color = if (selectedGender == "MALE") Color.Black else Color.White) },
+                        onClick = { selectedGender = "MALE" },
+                        colors = ChipDefaults.chipColors(
+                            backgroundColor = if (selectedGender == "MALE") Color.Cyan else Color.DarkGray
+                        )
+                    )
+                    CompactChip(
+                        label = { Text("Mujer", fontSize = 9.sp, color = if (selectedGender == "FEMALE") Color.Black else Color.White) },
+                        onClick = { selectedGender = "FEMALE" },
+                        colors = ChipDefaults.chipColors(
+                            backgroundColor = if (selectedGender == "FEMALE") Color.Cyan else Color.DarkGray
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 4. Velocidad
                 Text("Velocidad: ${(rate * 100).roundToInt() / 100.0}", fontSize = 10.sp, color = Color.White)
                 InlineSlider(
                     value = rate,
                     onValueChange = { rate = it },
                     steps = 9,
-                    decreaseIcon = {
-                        Icon(
-                            imageVector = InlineSliderDefaults.Decrease,
-                            contentDescription = "Disminuir velocidad"
-                        )
-                    },
-                    increaseIcon = {
-                        Icon(
-                            imageVector = InlineSliderDefaults.Increase,
-                            contentDescription = "Aumentar velocidad"
-                        )
-                    },
+                    decreaseIcon = { Icon(imageVector = InlineSliderDefaults.Decrease, contentDescription = "-") },
+                    increaseIcon = { Icon(imageVector = InlineSliderDefaults.Increase, contentDescription = "+") },
                     valueRange = 0.5f..1.5f,
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // 3. Tono (Pitch)
+                // 5. Tono
                 Text("Tono: ${(pitch * 100).roundToInt() / 100.0}", fontSize = 10.sp, color = Color.White)
                 InlineSlider(
                     value = pitch,
                     onValueChange = { pitch = it },
                     steps = 9,
-                    decreaseIcon = {
-                        Icon(
-                            imageVector = InlineSliderDefaults.Decrease,
-                            contentDescription = "Disminuir tono"
-                        )
-                    },
-                    increaseIcon = {
-                        Icon(
-                            imageVector = InlineSliderDefaults.Increase,
-                            contentDescription = "Aumentar tono"
-                        )
-                    },
+                    decreaseIcon = { Icon(imageVector = InlineSliderDefaults.Decrease, contentDescription = "-") },
+                    increaseIcon = { Icon(imageVector = InlineSliderDefaults.Increase, contentDescription = "+") },
                     valueRange = 0.5f..1.5f,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
-                // 4. Selección de Voz
-                Text("Voz de la App", fontSize = 10.sp, color = Color.White)
-                voices.forEach { voice ->
-                    val isSelected = voice.name == selectedVoice?.name
-                    Chip(
-                        label = {
-                            Text(
-                                text = voice.name.takeLast(15),
-                                fontSize = 9.sp,
-                                color = if (isSelected) Color.Black else Color.White
-                            )
-                        },
-                        onClick = { selectedVoice = voice },
-                        colors = ChipDefaults.chipColors(
-                            backgroundColor = if (isSelected) Color.Cyan else Color.DarkGray
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 2.dp)
-                    )
+                // 6. Lista de Voces (filtradas dinámicamente)
+                Text("Voces Disponibles (${filteredVoices.size})", fontSize = 10.sp, color = Color.White)
+                if (filteredVoices.isEmpty()) {
+                    Text("Sin voces para este filtro", fontSize = 9.sp, color = Color.Gray)
+                } else {
+                    filteredVoices.forEach { voice ->
+                        val isSelected = voice.name == selectedVoice?.name
+                        Chip(
+                            label = {
+                                Text(
+                                    text = voice.name.takeLast(16),
+                                    fontSize = 9.sp,
+                                    color = if (isSelected) Color.Black else Color.White
+                                )
+                            },
+                            onClick = { selectedVoice = voice },
+                            colors = ChipDefaults.chipColors(
+                                backgroundColor = if (isSelected) Color.Cyan else Color.DarkGray
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -730,7 +778,7 @@ fun SettingsScreen(
 
                     CompactButton(
                         onClick = {
-                            onSave(apiKeyText, selectedVoice, rate, pitch)
+                            onSave(apiKeyText, selectedLanguage, selectedGender, selectedVoice, rate, pitch)
                         },
                         colors = ButtonDefaults.buttonColors(backgroundColor = Color.Green)
                     ) {

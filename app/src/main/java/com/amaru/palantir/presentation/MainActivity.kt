@@ -22,15 +22,14 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.sharp.Settings
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,25 +47,35 @@ import com.amaru.palantir.InterfaceSelector
 import com.amaru.palantir.PalantirState
 import com.amaru.palantir.UiStyle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private val TAG = "PALANTIR_MAIN"
 
+    // #1: API key hardcodeada como fallback. Se override por SharedPreferences si existe.
+    private val DEFAULT_API_KEY = ""
+
     private lateinit var prefs: SharedPreferences
 
-    // Valores de configuración
-    private var apiKey: String = ""
+    private var apiKey: String = DEFAULT_API_KEY
     private var selectedVoiceName: String? = null
-    private var selectedLanguage: String = "ES" // "ES" o "US"
-    private var selectedGender: String = "MALE"  // "MALE" o "FEMALE"
+    private var selectedLanguage: String = "ES"
+    private var selectedGender: String = "MALE"
     private var speechRate: Float = 0.94f
     private var pitch: Float = 0.95f
 
@@ -74,23 +83,24 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
     private var availableVoicesList by mutableStateOf<List<Voice>>(emptyList())
 
-    // Reconocedor de la palabra clave (Wake Word)
     private var speechRecognizer: SpeechRecognizer? = null
     private var isListeningWakeWord = false
 
-    // Control de grabación
     private var isRecording = false
     private var audioRecord: AudioRecord? = null
-    private var recordingThread: Thread? = null
+    // #7: Job en vez de Thread crudo
+    private var recordingJob: Job? = null
 
-    // Estados reactivos UI
     private var currentState by mutableStateOf(PalantirState.WAITING_WAKE_WORD)
-    private var currentStyle by mutableStateOf(UiStyle.AUDIO_REACTIVE)
+    private var currentStyle by mutableStateOf(UiStyle.MYSTIC)
     private var amplitude by mutableIntStateOf(0)
     private var statusText by mutableStateOf("Di \"Oye Palantir\"...")
     private var showSettingsDialog by mutableStateOf(false)
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // #2: Duración máxima de grabación en ms
+    private val MAX_RECORDING_DURATION_MS = 30_000L
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -107,7 +117,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         super.onCreate(savedInstanceState)
 
         prefs = getSharedPreferences("palantir_settings", Context.MODE_PRIVATE)
-        apiKey = prefs.getString("gemini_api_key", apiKey) ?: apiKey
+        // #1: Carga desde SharedPreferences; si no existe, usa DEFAULT_API_KEY
+        apiKey = prefs.getString("gemini_api_key", DEFAULT_API_KEY) ?: DEFAULT_API_KEY
         selectedVoiceName = prefs.getString("tts_voice_name", null)
         selectedLanguage = prefs.getString("tts_language", "ES") ?: "ES"
         selectedGender = prefs.getString("tts_gender", "MALE") ?: "MALE"
@@ -178,6 +189,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                             onClick = {
                                 stopWakeWordListening()
                                 stopSpeaking()
+                                // #16: Recargar voces al abrir settings
+                                reloadTtsVoices()
                                 showSettingsDialog = true
                             },
                             modifier = Modifier.size(32.dp),
@@ -186,12 +199,30 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                 backgroundColor = Color.DarkGray.copy(alpha = 0.6f)
                             )
                         ) {
-                            Icon(
-                                imageVector = Icons.Sharp.Settings,
-                                contentDescription = "Ajustes",
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            Canvas(modifier = Modifier.size(16.dp)) {
+                                val r = size.minDimension / 2f
+                                val innerR = r * 0.55f
+                                val toothCount = 8
+                                val toothAngle = (2f * PI / toothCount).toFloat()
+                                val path = androidx.compose.ui.graphics.Path()
+                                for (i in 0 until toothCount) {
+                                    val a1 = i * toothAngle
+                                    val a2 = a1 + toothAngle * 0.35f
+                                    val a3 = a1 + toothAngle * 0.65f
+                                    val a4 = a1 + toothAngle
+                                    if (i == 0) path.moveTo(
+                                        center.x + r * cos(a1), center.y + r * sin(a1)
+                                    )
+                                    path.lineTo(center.x + r * cos(a2), center.y + r * sin(a2))
+                                    path.lineTo(center.x + innerR * cos(a3), center.y + innerR * sin(a3))
+                                    path.lineTo(center.x + innerR * cos(a4), center.y + innerR * sin(a4))
+                                    val nextA1 = (i + 1) * toothAngle
+                                    path.lineTo(center.x + r * cos(nextA1), center.y + r * sin(nextA1))
+                                }
+                                path.close()
+                                drawPath(path, color = Color.White)
+                                drawCircle(Color.Black, radius = innerR * 0.55f)
+                            }
                         }
                     }
 
@@ -222,7 +253,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                     apply()
                                 }
 
-                                geminiService = GeminiService(apiKey)
+                                // #3: No recrear GeminiService si la key no cambió
+                                geminiService.updateApiKey(apiKey)
                                 applyTtsSettings()
 
                                 showSettingsDialog = false
@@ -368,10 +400,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             currentState = PalantirState.LISTENING
             statusText = if (selectedLanguage == "US") "Listening..." else "Escuchando consulta..."
 
-            recordingThread = Thread {
+            // #7: Usar coroutine en vez de Thread crudo
+            recordingJob = lifecycleScope.launch(Dispatchers.IO) {
                 writeWavFileWithSilenceDetection(wavFile, sampleRate, bufferSize)
             }
-            recordingThread?.start()
 
         } catch (e: Exception) {
             Log.e(TAG, "Error iniciando grabación: ${e.message}")
@@ -379,27 +411,34 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun writeWavFileWithSilenceDetection(file: File, sampleRate: Int, bufferSize: Int) {
+    private suspend fun writeWavFileWithSilenceDetection(file: File, sampleRate: Int, bufferSize: Int) {
         val shortBuffer = ShortArray(bufferSize / 2)
-        val data = ByteArray(bufferSize)
-        val outputStream = FileOutputStream(file)
-
-        outputStream.write(ByteArray(44))
+        // #13: Usar ByteArrayOutputStream para evitar 2 aperturas de archivo
+        val audioStream = ByteArrayOutputStream()
 
         val silenceThresholdDb = -35.0
         val silenceDurationMs = 3000L
         var lastSoundTime = System.currentTimeMillis()
+        // #2: Control de duración máxima
+        val recordingStartTime = System.currentTimeMillis()
 
-        while (isRecording) {
+        while (isRecording && currentCoroutineContext().isActive) {
+            // #2: Check duración máxima
+            if (System.currentTimeMillis() - recordingStartTime >= MAX_RECORDING_DURATION_MS) {
+                Log.w(TAG, "Duración máxima de grabación alcanzada (${MAX_RECORDING_DURATION_MS}ms)")
+                break
+            }
+
             val readShorts = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: 0
             if (readShorts > 0) {
+                // Convertir PCM shorts a bytes y escribir al stream
+                val pcmBytes = ByteArray(readShorts * 2)
                 for (i in 0 until readShorts) {
                     val sample = shortBuffer[i].toInt()
-                    data[i * 2] = (sample and 0x00FF).toByte()
-                    data[i * 2 + 1] = ((sample shr 8) and 0x00FF).toByte()
+                    pcmBytes[i * 2] = (sample and 0x00FF).toByte()
+                    pcmBytes[i * 2 + 1] = ((sample shr 8) and 0x00FF).toByte()
                 }
-
-                outputStream.write(data, 0, readShorts * 2)
+                audioStream.write(pcmBytes)
 
                 var maxAmplitude = 0
                 var sumSquares = 0.0
@@ -408,7 +447,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     if (absSample > maxAmplitude) maxAmplitude = absSample
                     sumSquares += (shortBuffer[i] * shortBuffer[i]).toDouble()
                 }
-                amplitude = maxAmplitude
+                // #9: Sincronizar amplitude via mainHandler
+                mainHandler.post { amplitude = maxAmplitude }
 
                 val rms = sqrt(sumSquares / readShorts)
                 val db = if (rms > 0) 20 * Math.log10(rms / 32767.0) else -100.0
@@ -423,38 +463,56 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     }
                 }
             }
+            // #8: Yield al CPU para evitar spin-loop al 100%
+            Thread.sleep(10)
         }
 
-        outputStream.close()
-        finalizeWavHeader(file, sampleRate)
+        // #13: Escribir WAV completo en un solo paso
+        val audioData = audioStream.toByteArray()
+        if (audioData.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                FileOutputStream(file).use { fos ->
+                    writeWavHeader(fos, sampleRate, audioData.size)
+                    fos.write(audioData)
+                }
+            }
+        }
 
         mainHandler.post { finishQueryRecording() }
     }
 
-    private fun finalizeWavHeader(file: File, sampleRate: Int) {
-        if (!file.exists() || file.length() <= 44) return
-
-        val totalAudioLen = file.length() - 44
-        val totalDataLen = totalAudioLen + 36
+    // #13: Escribir header WAV directamente (sin RandomAccessFile)
+    private fun writeWavHeader(out: java.io.OutputStream, sampleRate: Int, dataSize: Int) {
+        val totalDataLen = dataSize + 36
         val channels = 1
-        val byteRate = sampleRate * 16 * channels / 8
+        val bitsPerSample = 16
+        val byteRate = sampleRate * channels * bitsPerSample / 8
 
-        val randomAccessFile = RandomAccessFile(file, "rw")
-        randomAccessFile.seek(0)
-        randomAccessFile.writeBytes("RIFF")
-        randomAccessFile.writeInt(Integer.reverseBytes(totalDataLen.toInt()))
-        randomAccessFile.writeBytes("WAVEfmt ")
-        randomAccessFile.writeInt(Integer.reverseBytes(16))
-        randomAccessFile.writeShort(java.lang.Short.reverseBytes(1.toShort()).toInt())
-        randomAccessFile.writeShort(java.lang.Short.reverseBytes(channels.toShort()).toInt())
-        randomAccessFile.writeInt(Integer.reverseBytes(sampleRate))
-        randomAccessFile.writeInt(Integer.reverseBytes(byteRate))
-        randomAccessFile.writeShort(java.lang.Short.reverseBytes((channels * 16 / 8).toShort()).toInt())
-        randomAccessFile.writeShort(java.lang.Short.reverseBytes(16.toShort()).toInt())
-        randomAccessFile.writeBytes("data")
-        randomAccessFile.writeInt(Integer.reverseBytes(totalAudioLen.toInt()))
-        randomAccessFile.close()
+        out.write("RIFF".toByteArray())
+        out.write(intToLittleEndian(totalDataLen))
+        out.write("WAVEfmt ".toByteArray())
+        out.write(intToLittleEndian(16))
+        out.write(shortToLittleEndian(1))  // PCM format
+        out.write(shortToLittleEndian(channels.toShort()))
+        out.write(intToLittleEndian(sampleRate))
+        out.write(intToLittleEndian(byteRate))
+        out.write(shortToLittleEndian((channels * bitsPerSample / 8).toShort()))
+        out.write(shortToLittleEndian(bitsPerSample.toShort()))
+        out.write("data".toByteArray())
+        out.write(intToLittleEndian(dataSize))
     }
+
+    private fun intToLittleEndian(value: Int): ByteArray = byteArrayOf(
+        (value and 0xFF).toByte(),
+        ((value shr 8) and 0xFF).toByte(),
+        ((value shr 16) and 0xFF).toByte(),
+        ((value shr 24) and 0xFF).toByte()
+    )
+
+    private fun shortToLittleEndian(value: Short): ByteArray = byteArrayOf(
+        (value.toInt() and 0xFF).toByte(),
+        ((value.toInt() shr 8) and 0xFF).toByte()
+    )
 
     private fun finishQueryRecording() {
         if (currentState != PalantirState.LISTENING && currentState != PalantirState.THINKING) return
@@ -505,10 +563,19 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     mainHandler.post { resetToWakeWordState() }
                 }
 
+                @Suppress("DEPRECATION")
                 override fun onError(utteranceId: String?) {
                     mainHandler.post { resetToWakeWordState() }
                 }
             })
+        }
+    }
+
+    // #16: Recargar voces dinámicamente
+    private fun reloadTtsVoices() {
+        tts?.let {
+            val allVoices = it.voices ?: emptySet()
+            availableVoicesList = allVoices.toList()
         }
     }
 
@@ -526,7 +593,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             }
         }
 
-        // Selección por defecto filtrada por idioma y género
         val filtered = availableVoicesList.filter { voice ->
             val langMatch = if (selectedLanguage == "US") voice.locale.language == "en" else voice.locale.language == "es"
             val name = voice.name.lowercase(Locale.getDefault())
@@ -575,9 +641,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         super.onDestroy()
         isRecording = false
         isListeningWakeWord = false
+        recordingJob?.cancel()
         speechRecognizer?.destroy()
         tts?.stop()
-        tts?.shutdown()
+        // #15: TTS shutdown en background para evitar ANR
+        lifecycleScope.launch(Dispatchers.IO) {
+            tts?.shutdown()
+        }
     }
 }
 
@@ -596,12 +666,11 @@ fun SettingsScreen(
     onDismiss: () -> Unit
 ) {
     var apiKeyText by remember { mutableStateOf(currentApiKey) }
-    var selectedLanguage by remember { mutableStateOf(currentLanguage) } // "ES" o "US"
-    var selectedGender by remember { mutableStateOf(currentGender) }     // "MALE" o "FEMALE"
+    var selectedLanguage by remember { mutableStateOf(currentLanguage) }
+    var selectedGender by remember { mutableStateOf(currentGender) }
     var rate by remember { mutableFloatStateOf(currentRate) }
     var pitch by remember { mutableFloatStateOf(currentPitch) }
 
-    // Filtrar voces según Idioma (ES / US) y Género (Hombre / Mujer)
     val filteredVoices = remember(selectedLanguage, selectedGender, allVoices) {
         allVoices.filter { voice ->
             val langMatch = if (selectedLanguage == "US") {
@@ -631,161 +700,158 @@ fun SettingsScreen(
                 .background(Color.Black)
                 .padding(8.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState()),
+            // #10: LazyColumn para lazy loading de voces
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = "Ajustes",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-
-                // 1. API Key
-                Text("API Key Gemini", fontSize = 10.sp, color = Color.Gray)
-                BasicTextField(
-                    value = apiKeyText,
-                    onValueChange = { apiKeyText = it },
-                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.Cyan, fontSize = 10.sp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.DarkGray, shape = CircleShape)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 2. Selector de IDIOMA (ES / US)
-                Text("Idioma", fontSize = 10.sp, color = Color.White)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    CompactChip(
-                        label = { Text("ES", fontSize = 9.sp, color = if (selectedLanguage == "ES") Color.Black else Color.White) },
-                        onClick = { selectedLanguage = "ES" },
-                        colors = ChipDefaults.chipColors(
-                            backgroundColor = if (selectedLanguage == "ES") Color.Cyan else Color.DarkGray
-                        )
+                item {
+                    Text(
+                        text = "Ajustes",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.padding(vertical = 4.dp)
                     )
-                    CompactChip(
-                        label = { Text("US", fontSize = 9.sp, color = if (selectedLanguage == "US") Color.Black else Color.White) },
-                        onClick = { selectedLanguage = "US" },
-                        colors = ChipDefaults.chipColors(
-                            backgroundColor = if (selectedLanguage == "US") Color.Cyan else Color.DarkGray
-                        )
+
+                    Text("API Key Gemini", fontSize = 10.sp, color = Color.Gray)
+                    BasicTextField(
+                        value = apiKeyText,
+                        onValueChange = { apiKeyText = it },
+                        textStyle = androidx.compose.ui.text.TextStyle(color = Color.Cyan, fontSize = 10.sp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.DarkGray, shape = CircleShape)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
-                }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                // 3. Selector de GÉNERO (Hombre / Mujer)
-                Text("Género", fontSize = 10.sp, color = Color.White)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    CompactChip(
-                        label = { Text("Hombre", fontSize = 9.sp, color = if (selectedGender == "MALE") Color.Black else Color.White) },
-                        onClick = { selectedGender = "MALE" },
-                        colors = ChipDefaults.chipColors(
-                            backgroundColor = if (selectedGender == "MALE") Color.Cyan else Color.DarkGray
-                        )
-                    )
-                    CompactChip(
-                        label = { Text("Mujer", fontSize = 9.sp, color = if (selectedGender == "FEMALE") Color.Black else Color.White) },
-                        onClick = { selectedGender = "FEMALE" },
-                        colors = ChipDefaults.chipColors(
-                            backgroundColor = if (selectedGender == "FEMALE") Color.Cyan else Color.DarkGray
-                        )
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 4. Velocidad
-                Text("Velocidad: ${(rate * 100).roundToInt() / 100.0}", fontSize = 10.sp, color = Color.White)
-                InlineSlider(
-                    value = rate,
-                    onValueChange = { rate = it },
-                    steps = 9,
-                    decreaseIcon = { Icon(imageVector = InlineSliderDefaults.Decrease, contentDescription = "-") },
-                    increaseIcon = { Icon(imageVector = InlineSliderDefaults.Increase, contentDescription = "+") },
-                    valueRange = 0.5f..1.5f,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // 5. Tono
-                Text("Tono: ${(pitch * 100).roundToInt() / 100.0}", fontSize = 10.sp, color = Color.White)
-                InlineSlider(
-                    value = pitch,
-                    onValueChange = { pitch = it },
-                    steps = 9,
-                    decreaseIcon = { Icon(imageVector = InlineSliderDefaults.Decrease, contentDescription = "-") },
-                    increaseIcon = { Icon(imageVector = InlineSliderDefaults.Increase, contentDescription = "+") },
-                    valueRange = 0.5f..1.5f,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // 6. Lista de Voces (filtradas dinámicamente)
-                Text("Voces Disponibles (${filteredVoices.size})", fontSize = 10.sp, color = Color.White)
-                if (filteredVoices.isEmpty()) {
-                    Text("Sin voces para este filtro", fontSize = 9.sp, color = Color.Gray)
-                } else {
-                    filteredVoices.forEach { voice ->
-                        val isSelected = voice.name == selectedVoice?.name
-                        Chip(
-                            label = {
-                                Text(
-                                    text = voice.name.takeLast(16),
-                                    fontSize = 9.sp,
-                                    color = if (isSelected) Color.Black else Color.White
-                                )
-                            },
-                            onClick = { selectedVoice = voice },
+                    Text("Idioma", fontSize = 10.sp, color = Color.White)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        CompactChip(
+                            label = { Text("ES", fontSize = 9.sp, color = if (selectedLanguage == "ES") Color.Black else Color.White) },
+                            onClick = { selectedLanguage = "ES" },
                             colors = ChipDefaults.chipColors(
-                                backgroundColor = if (isSelected) Color.Cyan else Color.DarkGray
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp)
+                                backgroundColor = if (selectedLanguage == "ES") Color.Cyan else Color.DarkGray
+                            )
                         )
+                        CompactChip(
+                            label = { Text("US", fontSize = 9.sp, color = if (selectedLanguage == "US") Color.Black else Color.White) },
+                            onClick = { selectedLanguage = "US" },
+                            colors = ChipDefaults.chipColors(
+                                backgroundColor = if (selectedLanguage == "US") Color.Cyan else Color.DarkGray
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text("Género", fontSize = 10.sp, color = Color.White)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        CompactChip(
+                            label = { Text("Hombre", fontSize = 9.sp, color = if (selectedGender == "MALE") Color.Black else Color.White) },
+                            onClick = { selectedGender = "MALE" },
+                            colors = ChipDefaults.chipColors(
+                                backgroundColor = if (selectedGender == "MALE") Color.Cyan else Color.DarkGray
+                            )
+                        )
+                        CompactChip(
+                            label = { Text("Mujer", fontSize = 9.sp, color = if (selectedGender == "FEMALE") Color.Black else Color.White) },
+                            onClick = { selectedGender = "FEMALE" },
+                            colors = ChipDefaults.chipColors(
+                                backgroundColor = if (selectedGender == "FEMALE") Color.Cyan else Color.DarkGray
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text("Velocidad: ${(rate * 100).roundToInt() / 100.0}", fontSize = 10.sp, color = Color.White)
+                    InlineSlider(
+                        value = rate,
+                        onValueChange = { rate = it },
+                        steps = 9,
+                        decreaseIcon = { Icon(imageVector = InlineSliderDefaults.Decrease, contentDescription = "-") },
+                        increaseIcon = { Icon(imageVector = InlineSliderDefaults.Increase, contentDescription = "+") },
+                        valueRange = 0.5f..1.5f,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text("Tono: ${(pitch * 100).roundToInt() / 100.0}", fontSize = 10.sp, color = Color.White)
+                    InlineSlider(
+                        value = pitch,
+                        onValueChange = { pitch = it },
+                        steps = 9,
+                        decreaseIcon = { Icon(imageVector = InlineSliderDefaults.Decrease, contentDescription = "-") },
+                        increaseIcon = { Icon(imageVector = InlineSliderDefaults.Increase, contentDescription = "+") },
+                        valueRange = 0.5f..1.5f,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text("Voces Disponibles (${filteredVoices.size})", fontSize = 10.sp, color = Color.White)
+                    if (filteredVoices.isEmpty()) {
+                        Text("Sin voces para este filtro", fontSize = 9.sp, color = Color.Gray)
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Botones Guardar y Cancelar
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    CompactButton(
-                        onClick = onDismiss,
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)
-                    ) {
-                        Text("X", fontSize = 10.sp, color = Color.White)
-                    }
-
-                    CompactButton(
-                        onClick = {
-                            onSave(apiKeyText, selectedLanguage, selectedGender, selectedVoice, rate, pitch)
+                // #10: LazyColumn items para lazy loading
+                items(filteredVoices, key = { it.name }) { voice ->
+                    val isSelected = voice.name == selectedVoice?.name
+                    Chip(
+                        label = {
+                            Text(
+                                text = voice.name.takeLast(16),
+                                fontSize = 9.sp,
+                                color = if (isSelected) Color.Black else Color.White
+                            )
                         },
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color.Green)
+                        onClick = { selectedVoice = voice },
+                        colors = ChipDefaults.chipColors(
+                            backgroundColor = if (isSelected) Color.Cyan else Color.DarkGray
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp)
+                    )
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
-                        Text("✓", fontSize = 10.sp, color = Color.Black)
+                        CompactButton(
+                            onClick = onDismiss,
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red)
+                        ) {
+                            Text("X", fontSize = 10.sp, color = Color.White)
+                        }
+
+                        CompactButton(
+                            onClick = {
+                                onSave(apiKeyText, selectedLanguage, selectedGender, selectedVoice, rate, pitch)
+                            },
+                            colors = ButtonDefaults.buttonColors(backgroundColor = Color.Green)
+                        ) {
+                            Text("✓", fontSize = 10.sp, color = Color.Black)
+                        }
                     }
                 }
             }

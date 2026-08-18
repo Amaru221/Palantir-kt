@@ -457,16 +457,18 @@ fun RadialWaveformUi(state: PalantirState, amplitude: Int) {
     val numBars = 40
     val barHeights = remember { mutableStateListOf<Float>().apply { repeat(numBars) { add(0.3f) } } }
 
+    // #12: Usar currentTime (capturado antes del Canvas) en vez de System.currentTimeMillis() por barra
     LaunchedEffect(state, amplitude) {
         while (true) {
+            val now = System.currentTimeMillis()
             for (i in 0 until numBars) {
                 barHeights[i] = when (state) {
-                    PalantirState.WAITING_WAKE_WORD -> 0.2f + (sin(i + System.currentTimeMillis() / 300.0) * 0.1f).toFloat()
+                    PalantirState.WAITING_WAKE_WORD -> 0.2f + (sin(i + now / 300.0) * 0.1f).toFloat()
                     PalantirState.LISTENING, PalantirState.SPEAKING -> {
                         val baseAmp = (amplitude / 6000f).coerceIn(0.1f, 0.9f)
                         (baseAmp * Random.nextFloat()).coerceIn(0.15f, 0.95f)
                     }
-                    PalantirState.THINKING -> 0.3f + (sin(i * 0.5 + System.currentTimeMillis() / 150.0) * 0.3f).toFloat()
+                    PalantirState.THINKING -> 0.3f + (sin(i * 0.5 + now / 150.0) * 0.3f).toFloat()
                 }
             }
             kotlinx.coroutines.delay(60)

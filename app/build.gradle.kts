@@ -44,13 +44,6 @@ dependencies {
     implementation("androidx.wear.compose:compose-foundation:1.3.0")
     implementation("androidx.wear.compose:compose-ui-tooling:1.3.0")
 
-    // Ktor para peticiones a la API de OpenAI
-    implementation("io.ktor:ktor-client-core:2.3.10")
-    implementation("io.ktor:ktor-client-cio:2.3.10")
-    implementation("io.ktor:ktor-client-content-negotiation:2.3.10")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.10")
     // SDK Oficial de Google AI / Gemini para Kotlin
     implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
-    implementation("androidx.compose.material:material-icons-extended:1.6.8")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 }

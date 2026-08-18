@@ -157,9 +157,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                             fontSize = 9.sp,
                             modifier = Modifier.clickable {
                                 currentStyle = when (currentStyle) {
-                                    UiStyle.AUDIO_REACTIVE -> UiStyle.EYES
                                     UiStyle.EYES -> UiStyle.SCI_FI
                                     UiStyle.SCI_FI -> UiStyle.AUDIO_REACTIVE
+                                    UiStyle.AUDIO_REACTIVE -> UiStyle.MYSTIC
+                                    UiStyle.MYSTIC -> UiStyle.HALO
+                                    UiStyle.HALO -> UiStyle.RADIAL
+                                    UiStyle.RADIAL -> UiStyle.EYES
                                 }
                             }
                         )
